@@ -1,10 +1,14 @@
 import express from 'express';
-import mongoose from 'mongoose';
+import mongoose, { models } from 'mongoose';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import { StockTrend, parseStock, loss, optimizer } from './model';
 dotenv.config();
 
 //impots and environement
+
+const stock_models = {};
+const resolved_loss = {};
 
 const app = express()
 
@@ -48,7 +52,24 @@ app.get('/', (req, res) => {
 
 });
 
-app.get('/stocks', async (req, res) => {
+app.get('/predict', async (req, res) => {
+    const { symbol = "TSLA", timestamp } = req.query;
+    const time = timestamp ? new Date(timestamp) : new Date().toISOString();
+
+    if (resolved_loss.hasOwnProperty(symbol)) await resolved_loss[symbol]
+
+    res.json({
+        requested_symbol: symbol,
+        fetched_at: new Date().toISOString(),
+        data: {
+            timestamp,
+            price: await stock_models[symbol].predict(time)
+        }
+    });
+
+});
+
+app.get('/current', async (req, res) => {
     try {
         const { symbols = "AAPL,TSLA,MSFT" } = req.query;
 
@@ -62,6 +83,47 @@ app.get('/stocks', async (req, res) => {
             },
             timeout: 10000
         });
+
+        console.log(response.data.data)
+
+        for (const symbol in response.data.data) {
+            const processed = parseStock(response.data.data[symbol]);
+
+            if (resolved_loss.hasOwnProperty(symbol)) await resolved_loss[symbol]
+
+            if (!stock_models.hasOwnProperty(symbol)) {
+                resolved_loss[symbol] = (async () => {
+                    stock_models[symbol] = new StockTrend(processed);
+                    stock_models[symbol].compile({ loss, optimizer });
+
+                    return 0;
+                })();
+
+                continue;
+            }
+
+            resolved_loss[symbol] = stock_models[symbol].fit(processed);
+
+            // let curr = (new Date(response.data.data[symbol].last_trade_time)).getTime();
+
+            // if (memo[symbol].time >= curr) {
+            //     memo[symbol].prev = response.data.data[symbol].price
+            //     memo[symbol].a = Math.max(memo[symbol].a + curr - memo[symbol].time, 0)
+            //     memo[symbol].time = curr
+
+            // } else {
+            //     let b = curr - memo[symbol].time;
+            //     let new_slope = (response.data.data[symbol].price - memo[symbol].prev) / b;
+            //     console.log(`stock: ${symbol}, new: ${response.data.data[symbol].price}, old: ${memo[symbol].prev}, now: ${curr}, prev: ${memo[symbol].time}, old_slope: ${memo[symbol].slope}, new_slope: ${new_slope}`);
+            //     memo[symbol].prev = response.data.data[symbol].price
+            //     memo[symbol].slope = (memo[symbol].a * memo[symbol].slope + b * new_slope) / (memo[symbol].a + b);
+            //     memo[symbol].a += b
+            //     memo[symbol].time = curr
+
+            // }
+            // response.data.data[symbol] = response.data.data[symbol].price
+            // console.log(symbol)
+        }
 
         console.log(`Fetched for ${symbols}`);
 
